@@ -2,7 +2,6 @@ import {
   ensureD1Initialized,
   getSettingD1,
   hashPasswordWorker,
-  randomHex,
   recordAuditD1,
   setSettingD1,
   verifyPasswordWorker,
@@ -16,116 +15,56 @@ import {
 } from './financeLogic';
 import { WorkerEnv } from './types';
 
-const SESSION_COOKIE = 'np_session';
-
-interface SessionPayload {
-  role: 'CEO' | 'PCA';
-  exp: number;
-  nonce: string;
+function getAllowedOrigins(env: WorkerEnv): string[] {
+  return env.ALLOWED_ORIGINS
+    ? env.ALLOWED_ORIGINS.split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0 && s !== '*')
+    : [];
 }
 
-function toBase64Url(bytes: Uint8Array): string {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) {
-    bin += String.fromCharCode(bytes[i]);
+function isOriginAllowed(request: Request, env: WorkerEnv, url: URL): boolean {
+  const origin = request.headers.get('Origin');
+  if (!origin) return true;
+  if (origin === url.origin) return true;
+  return getAllowedOrigins(env).includes(origin);
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  const aBytes = new TextEncoder().encode(a);
+  const bBytes = new TextEncoder().encode(b);
+  if (aBytes.length !== bBytes.length) return false;
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i++) {
+    diff |= aBytes[i] ^ bBytes[i];
   }
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return diff === 0;
 }
 
-function fromBase64Url(str: string): Uint8Array {
-  const padded = str.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((str.length + 3) % 4);
-  const bin = atob(padded);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    out[i] = bin.charCodeAt(i);
+function hasValidAdminKey(request: Request, env: WorkerEnv): boolean {
+  const configured = env.ADMIN_API_KEY?.trim();
+  if (!configured) return false;
+  const headerKey = request.headers.get('X-Admin-Key')?.trim();
+  if (headerKey && constantTimeEqual(headerKey, configured)) return true;
+  const auth = request.headers.get('Authorization')?.trim();
+  if (auth && auth.startsWith('Bearer ')) {
+    const token = auth.slice(7).trim();
+    if (token && constantTimeEqual(token, configured)) return true;
   }
-  return out;
-}
-
-async function signTokenWorker(payload: SessionPayload, secret: string): Promise<string> {
-  const encoded = toBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(encoded));
-  return `${encoded}.${toBase64Url(new Uint8Array(sig))}`;
-}
-
-async function verifyTokenWorker(
-  token: string | undefined,
-  secret: string
-): Promise<SessionPayload | null> {
-  if (!token || !token.includes('.')) return null;
-  const [encoded, sig] = token.split('.');
-  if (!encoded || !sig) return null;
-
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['verify']
-  );
-  try {
-    const valid = await crypto.subtle.verify(
-      'HMAC',
-      key,
-      fromBase64Url(sig).buffer as ArrayBuffer,
-      new TextEncoder().encode(encoded)
-    );
-    if (!valid) return null;
-    const decoded = new TextDecoder().decode(fromBase64Url(encoded));
-    const parsed = JSON.parse(decoded) as SessionPayload;
-    if (!parsed || (parsed.role !== 'CEO' && parsed.role !== 'PCA')) return null;
-    if (typeof parsed.exp !== 'number' || Date.now() > parsed.exp) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function parseCookies(cookieHeader: string | null): Record<string, string> {
-  if (!cookieHeader) return {};
-  const map: Record<string, string> = {};
-  for (const part of cookieHeader.split(';')) {
-    const idx = part.indexOf('=');
-    if (idx === -1) continue;
-    const k = part.slice(0, idx).trim();
-    const v = part.slice(idx + 1).trim();
-    if (k) map[k] = decodeURIComponent(v);
-  }
-  return map;
-}
-
-function extractToken(request: Request): string | undefined {
-  const cookies = parseCookies(request.headers.get('Cookie'));
-  if (cookies[SESSION_COOKIE]) return cookies[SESSION_COOKIE];
-  const authHeader = request.headers.get('Authorization');
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.slice(7).trim();
-  }
-  return undefined;
+  return false;
 }
 
 function buildCorsHeaders(request: Request, env: WorkerEnv): Headers {
   const headers = new Headers();
   const origin = request.headers.get('Origin');
-  if (origin) {
-    const allowed = env.ALLOWED_ORIGINS
-      ? env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
-      : [];
-    if (allowed.length === 0 || allowed.includes('*') || allowed.includes(origin)) {
-      headers.set('Access-Control-Allow-Origin', origin);
-      headers.set('Vary', 'Origin');
-    }
+  const url = new URL(request.url);
+  if (origin && isOriginAllowed(request, env, url)) {
+    headers.set('Access-Control-Allow-Origin', origin);
+    headers.set('Vary', 'Origin');
   }
   headers.set('Access-Control-Allow-Credentials', 'true');
   headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Admin-Key');
   headers.set('Access-Control-Max-Age', '86400');
   return headers;
 }
@@ -179,6 +118,18 @@ export async function handleApiRequest(request: Request, env: WorkerEnv): Promis
   const path = url.pathname.replace(/\/+$/, '') || '/';
   const method = request.method.toUpperCase();
 
+  // Bloqueia pedidos cross-site não autorizados em mutações
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const origin = request.headers.get('Origin');
+    const fetchSite = request.headers.get('Sec-Fetch-Site');
+    if (origin && !isOriginAllowed(request, env, url)) {
+      return json(request, env, { error: 'Pedido bloqueado: origem não autorizada.' }, 403);
+    }
+    if (fetchSite === 'cross-site' && (!origin || !getAllowedOrigins(env).includes(origin))) {
+      return json(request, env, { error: 'Pedido cross-site bloqueado por segurança.' }, 403);
+    }
+  }
+
   if (!env.DB) {
     return json(
       request,
@@ -193,124 +144,48 @@ export async function handleApiRequest(request: Request, env: WorkerEnv): Promis
 
   await ensureD1Initialized(env);
   const db = env.DB;
-  const secret = env.SESSION_SECRET || (await getSettingD1(db, 'session_secret'));
-  const isHttps = url.protocol === 'https:';
-  const requestOrigin = request.headers.get('Origin');
-  const isCrossOrigin = Boolean(requestOrigin && requestOrigin !== url.origin);
-  const sameSiteCookie = isHttps
-    ? `${isCrossOrigin ? 'SameSite=None' : 'SameSite=Lax'}; Secure`
-    : 'SameSite=Lax';
 
   if (path === '/api/health') {
     if (method !== 'GET') return json(request, env, { error: 'Método não permitido.' }, 405, { Allow: 'GET, OPTIONS' });
     return json(request, env, { ok: true, service: 'novo-planeta-financas', runtime: 'cloudflare-worker' });
   }
 
+  if (path === '/api/auth/login' || path === '/api/auth/logout') {
+    return json(request, env, { error: 'O início de sessão foi removido desta versão simples.' }, 410);
+  }
+
   if (path === '/api/auth/status') {
     if (method !== 'GET') return json(request, env, { error: 'Método não permitido.' }, 405, { Allow: 'GET, OPTIONS' });
-    const payload = await verifyTokenWorker(extractToken(request), secret);
-    const [companyName, logoUrl, isDef] = await Promise.all([
+    const [companyName, logoUrl] = await Promise.all([
       getSettingD1(db, 'company_name', 'NOVO PLANETA'),
       getSettingD1(db, 'logo_url', ''),
-      getSettingD1(db, 'is_default_password', '0'),
     ]);
     return json(request, env, {
-      authenticated: Boolean(payload),
-      role: payload ? payload.role : null,
+      authenticated: true,
+      role: 'Administração',
       companyName,
       logoUrl,
-      isDefaultPassword: isDef === '1',
     });
   }
 
-  if (path === '/api/auth/login') {
-    if (method !== 'POST') {
-      return json(request, env, { error: 'Use o método POST para iniciar sessão.' }, 405, {
-        Allow: 'POST, OPTIONS',
-      });
-    }
-    const { role, password } = await readJsonBody<{ role?: string; password?: string }>(request);
-    if (role !== 'CEO' && role !== 'PCA') {
-      return json(request, env, { error: 'Selecione um perfil autorizado (CEO ou PCA).' }, 400);
-    }
-    if (typeof password !== 'string' || password.length === 0) {
-      return json(request, env, { error: 'Introduza a palavra-passe administrativa.' }, 400);
-    }
+  // Autorização administrativa independente para operações sensíveis/destrutivas quando ADMIN_API_KEY estiver configurada
+  const isSensitiveAdminRoute =
+    path === '/api/auth/change-password' ||
+    path === '/api/backup/export' ||
+    path === '/api/backup/restore' ||
+    method === 'DELETE';
 
-    const storedHash = await getSettingD1(db, 'admin_password_hash');
-    const valid = await verifyPasswordWorker(password, storedHash);
-    if (!valid) {
-      return json(request, env, { error: 'Palavra-passe incorreta.' }, 401);
-    }
-
-    const token = await signTokenWorker(
-      {
-        role,
-        exp: Date.now() + 1000 * 60 * 60 * 24 * 7,
-        nonce: randomHex(8),
-      },
-      secret
-    );
-
-    await recordAuditD1(db, {
-      actor: role,
-      action: 'LOGIN',
-      entityType: 'sessao',
-      summary: `Início de sessão autorizado (${role}).`,
-    });
-
-    const isDefaultPassword = (await getSettingD1(db, 'is_default_password', '0')) === '1';
-    return json(
-      request,
-      env,
-      { ok: true, role, token, isDefaultPassword },
-      200,
-      {
-        'Set-Cookie': `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; Max-Age=604800; ${sameSiteCookie}`,
-      }
-    );
+  if (isSensitiveAdminRoute && env.ADMIN_API_KEY?.trim() && !hasValidAdminKey(request, env)) {
+    return json(request, env, { error: 'Autorização administrativa independente necessária para esta operação.' }, 403);
   }
 
-  if (path === '/api/auth/logout') {
-    if (method !== 'POST') {
-      return json(request, env, { error: 'Use o método POST para encerrar sessão.' }, 405, {
-        Allow: 'POST, OPTIONS',
-      });
-    }
-    const payload = await verifyTokenWorker(extractToken(request), secret);
-    if (payload) {
-      await recordAuditD1(db, {
-        actor: payload.role,
-        action: 'LOGOUT',
-        entityType: 'sessao',
-        summary: `Sessão encerrada (${payload.role}).`,
-      });
-    }
-    return json(
-      request,
-      env,
-      { ok: true },
-      200,
-      {
-        'Set-Cookie': `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0; ${sameSiteCookie}`,
-      }
-    );
-  }
+  const actor = 'Administração';
 
-  // Protected API routes below
-  const session = await verifyTokenWorker(extractToken(request), secret);
-  if (!session) {
-    return json(
-      request,
-      env,
-      { error: 'Sessão não autenticada ou expirada. Inicie sessão novamente.' },
-      401
-    );
-  }
-  const actor = session.role;
-
-  // Change password
+  // Change password (apenas via autorização administrativa independente)
   if (path === '/api/auth/change-password' && method === 'POST') {
+    if (!env.ADMIN_API_KEY?.trim() || !hasValidAdminKey(request, env)) {
+      return json(request, env, { error: 'Autorização administrativa independente necessária.' }, 403);
+    }
     const { currentPassword, newPassword } = await readJsonBody<{
       currentPassword?: string;
       newPassword?: string;
@@ -331,7 +206,7 @@ export async function handleApiRequest(request: Request, env: WorkerEnv): Promis
       actor,
       action: 'ALTERAR_SENHA',
       entityType: 'seguranca',
-      summary: 'Palavra-passe administrativa partilhada (CEO/PCA) alterada.',
+      summary: 'Palavra-passe administrativa alterada.',
     });
     return json(request, env, { ok: true });
   }
@@ -339,17 +214,15 @@ export async function handleApiRequest(request: Request, env: WorkerEnv): Promis
   // Settings
   if (path === '/api/settings') {
     if (method === 'GET') {
-      const [companyName, logoUrl, rateStr, isDef] = await Promise.all([
+      const [companyName, logoUrl, rateStr] = await Promise.all([
         getSettingD1(db, 'company_name', 'NOVO PLANETA'),
         getSettingD1(db, 'logo_url', ''),
         getSettingD1(db, 'commission_rate', '10'),
-        getSettingD1(db, 'is_default_password', '0'),
       ]);
       return json(request, env, {
         companyName,
         logoUrl,
         commissionRate: Number(rateStr) || 10,
-        isDefaultPassword: isDef === '1',
       });
     }
     if (method === 'PUT') {

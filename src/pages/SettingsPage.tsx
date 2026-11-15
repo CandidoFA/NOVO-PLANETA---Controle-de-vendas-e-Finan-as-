@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
-import { Check, Download, KeyRound, Upload } from 'lucide-react';
+import { Check, Download, Upload } from 'lucide-react';
 import { BrandLogo } from '../components/BrandLogo';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AppSettings } from '../types/finance';
@@ -15,12 +15,6 @@ export function SettingsPage({ onSettingsUpdated }: SettingsPageProps) {
   const [commissionRate, setCommissionRate] = useState('10');
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
-
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [savingPassword, setSavingPassword] = useState(false);
-  const [passwordMsg, setPasswordMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const [restoreJson, setRestoreJson] = useState<unknown | null>(null);
   const [restoreFileName, setRestoreFileName] = useState('');
@@ -58,33 +52,6 @@ export function SettingsPage({ onSettingsUpdated }: SettingsPageProps) {
       });
     } finally {
       setSavingSettings(false);
-    }
-  }
-
-  async function handleChangePassword(e: FormEvent) {
-    e.preventDefault();
-    setPasswordMsg(null);
-    if (newPassword !== confirmPassword) {
-      setPasswordMsg({ type: 'err', text: 'A nova palavra-passe e a confirmação não coincidem.' });
-      return;
-    }
-    setSavingPassword(true);
-    try {
-      await apiFetch('/api/auth/change-password', {
-        method: 'POST',
-        body: JSON.stringify({ currentPassword, newPassword }),
-      });
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      setPasswordMsg({ type: 'ok', text: 'Palavra-passe administrativa alterada com sucesso.' });
-    } catch (err) {
-      setPasswordMsg({
-        type: 'err',
-        text: err instanceof Error ? err.message : 'Erro ao alterar palavra-passe.',
-      });
-    } finally {
-      setSavingPassword(false);
     }
   }
 
@@ -152,9 +119,9 @@ export function SettingsPage({ onSettingsUpdated }: SettingsPageProps) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold tracking-tight text-slate-900">Definições e Segurança</h2>
+        <h2 className="text-2xl font-bold tracking-tight text-slate-900">Definições e Backup</h2>
         <p className="text-sm text-slate-500 mt-0.5">
-          Identidade visual, regra de comissões, palavra-passe partilhada (CEO/PCA) e cópias de segurança.
+          Identidade visual, regra de comissões e cópias de segurança.
         </p>
       </div>
 
@@ -239,74 +206,8 @@ export function SettingsPage({ onSettingsUpdated }: SettingsPageProps) {
         </div>
       </form>
 
-      {/* Change Password & Backup */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <form
-          onSubmit={handleChangePassword}
-          className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 space-y-4"
-        >
-          <div className="flex items-center gap-2">
-            <KeyRound className="h-4 w-4 text-slate-700" />
-            <h3 className="text-base font-semibold text-slate-900">Alterar Palavra-passe (CEO / PCA)</h3>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Palavra-passe atual</label>
-            <input
-              type="password"
-              required
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full min-h-[42px] rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Nova palavra-passe</label>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full min-h-[42px] rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Confirmar nova palavra-passe</label>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full min-h-[42px] rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
-
-          {passwordMsg && (
-            <div
-              className={`rounded-lg px-3.5 py-2.5 text-xs font-medium border ${
-                passwordMsg.type === 'ok'
-                  ? 'bg-teal-50 text-teal-800 border-teal-200'
-                  : 'bg-red-50 text-red-700 border-red-200'
-              }`}
-            >
-              {passwordMsg.text}
-            </div>
-          )}
-
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={savingPassword}
-              className="min-h-[42px] px-5 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
-            >
-              {savingPassword ? 'A atualizar...' : 'Atualizar Palavra-passe'}
-            </button>
-          </div>
-        </form>
-
-        <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 space-y-4 flex flex-col justify-between">
+      {/* Backup */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 space-y-4 flex flex-col justify-between">
           <div className="space-y-3">
             <h3 className="text-base font-semibold text-slate-900">Cópia de Segurança e Recuperação</h3>
             <p className="text-xs text-slate-600 leading-relaxed">
@@ -349,7 +250,6 @@ export function SettingsPage({ onSettingsUpdated }: SettingsPageProps) {
             </label>
           </div>
         </div>
-      </div>
 
       <ConfirmDialog
         open={restoreConfirmOpen}

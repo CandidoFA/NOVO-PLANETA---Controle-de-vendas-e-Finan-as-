@@ -1,4 +1,4 @@
-export type AdminRole = 'CEO' | 'PCA';
+export type AdminRole = 'CEO' | 'PCA' | 'Administração';
 
 export type RecordStatus = 'ativo' | 'anulado';
 export type DepositStatus = 'realizado' | 'pendente' | 'anulado';
@@ -8,7 +8,6 @@ export interface AppSettings {
   companyName: string;
   logoUrl: string;
   commissionRate: number;
-  isDefaultPassword: boolean;
 }
 
 export interface ServiceArea {

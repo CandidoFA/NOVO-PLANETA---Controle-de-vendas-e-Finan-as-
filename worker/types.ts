@@ -31,4 +31,5 @@ export interface WorkerEnv {
   SESSION_SECRET?: string;
   ALLOWED_ORIGINS?: string;
   ADMIN_INITIAL_PASSWORD?: string;
+  ADMIN_API_KEY?: string;
 }

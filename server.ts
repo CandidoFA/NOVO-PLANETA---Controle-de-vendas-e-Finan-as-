@@ -16,66 +16,45 @@ import {
 initDatabase();
 
 const PORT = 3000;
-const SESSION_COOKIE = 'np_session';
-
-interface SessionPayload {
-  role: 'CEO' | 'PCA';
-  exp: number;
-  nonce: string;
-}
 
 interface AuthenticatedRequest extends Request {
-  adminRole?: 'CEO' | 'PCA';
+  adminRole?: 'CEO' | 'PCA' | 'Administração';
 }
 
-function getSessionSecret(): string {
-  return process.env.SESSION_SECRET || getSetting('session_secret');
+function getAllowedOrigins(): string[] {
+  return process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0 && s !== '*')
+    : [];
 }
 
-function signToken(payload: SessionPayload): string {
-  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  const sig = crypto.createHmac('sha256', getSessionSecret()).update(encoded).digest('base64url');
-  return `${encoded}.${sig}`;
-}
-
-function verifyToken(token: string | undefined): SessionPayload | null {
-  if (!token || !token.includes('.')) return null;
-  const [encoded, sig] = token.split('.');
-  if (!encoded || !sig) return null;
-  const expectedSig = crypto.createHmac('sha256', getSessionSecret()).update(encoded).digest('base64url');
-  const sigBuf = Buffer.from(sig);
-  const expBuf = Buffer.from(expectedSig);
-  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-    return null;
+function isOriginAllowed(req: Request): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  if (host && (origin === `${proto}://${host}` || origin === `https://${host}` || origin === `http://${host}`)) {
+    return true;
   }
-  try {
-    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as SessionPayload;
-    if (!parsed || (parsed.role !== 'CEO' && parsed.role !== 'PCA')) return null;
-    if (typeof parsed.exp !== 'number' || Date.now() > parsed.exp) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+  return getAllowedOrigins().includes(origin);
 }
 
-function extractToken(req: Request): string | undefined {
-  const cookieToken = req.cookies?.[SESSION_COOKIE] as string | undefined;
-  if (cookieToken) return cookieToken;
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.slice(7).trim();
+function hasValidAdminKey(req: Request): boolean {
+  const configured = process.env.ADMIN_API_KEY?.trim();
+  if (!configured) return false;
+  const headerKey = (req.headers['x-admin-key'] as string | undefined)?.trim();
+  if (headerKey && headerKey.length === configured.length && crypto.timingSafeEqual(Buffer.from(headerKey), Buffer.from(configured))) {
+    return true;
   }
-  return undefined;
-}
-
-function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  const payload = verifyToken(extractToken(req));
-  if (!payload) {
-    res.status(401).json({ error: 'Sessão não autenticada ou expirada. Inicie sessão novamente.' });
-    return;
+  const auth = req.headers.authorization?.trim();
+  if (auth && auth.startsWith('Bearer ')) {
+    const token = auth.slice(7).trim();
+    if (token && token.length === configured.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(configured))) {
+      return true;
+    }
   }
-  req.adminRole = payload.role;
-  next();
+  return false;
 }
 
 function isValidISODate(val: unknown): val is string {
@@ -91,28 +70,51 @@ function toSlug(name: string): string {
     .replace(/^-+|-+$/g, '') || `area-${Date.now()}`;
 }
 
-// Simple in-memory login attempt tracking per IP
-const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
-
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1);
   app.use(express.json({ limit: '10mb' }));
   app.use(cookieParser());
 
-  app.use('/api', (req, res, next) => {
+  app.use('/api', (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     const origin = req.headers.origin;
-    if (origin) {
+    if (origin && isOriginAllowed(req)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
     }
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Admin-Key');
     if (req.method === 'OPTIONS') {
       res.status(204).end();
       return;
     }
+
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method.toUpperCase())) {
+      const fetchSite = req.headers['sec-fetch-site'];
+      if (origin && !isOriginAllowed(req)) {
+        res.status(403).json({ error: 'Pedido bloqueado: origem não autorizada.' });
+        return;
+      }
+      if (fetchSite === 'cross-site' && (!origin || !getAllowedOrigins().includes(origin))) {
+        res.status(403).json({ error: 'Pedido cross-site bloqueado por segurança.' });
+        return;
+      }
+    }
+
+    const configuredAdminKey = process.env.ADMIN_API_KEY?.trim();
+    const isSensitiveRoute =
+      req.path === '/auth/change-password' ||
+      req.path === '/backup/export' ||
+      req.path === '/backup/restore' ||
+      req.method.toUpperCase() === 'DELETE';
+
+    if (isSensitiveRoute && configuredAdminKey && !hasValidAdminKey(req)) {
+      res.status(403).json({ error: 'Autorização administrativa independente necessária para esta operação.' });
+      return;
+    }
+
+    req.adminRole = 'Administração';
     next();
   });
 
@@ -120,108 +122,28 @@ async function startServer() {
     res.json({ ok: true, service: 'novo-planeta-financas' });
   });
 
-  // Public auth status & branding (does NOT leak any financial data)
-  app.get('/api/auth/status', (req, res) => {
-    const payload = verifyToken(extractToken(req));
+  app.all('/api/auth/login', (_req, res) => {
+    res.status(410).json({ error: 'O início de sessão foi removido desta versão simples.' });
+  });
+
+  app.all('/api/auth/logout', (_req, res) => {
+    res.status(410).json({ error: 'O início de sessão foi removido desta versão simples.' });
+  });
+
+  app.get('/api/auth/status', (_req, res) => {
     res.json({
-      authenticated: Boolean(payload),
-      role: payload ? payload.role : null,
+      authenticated: true,
+      role: 'Administração',
       companyName: getSetting('company_name', 'NOVO PLANETA'),
       logoUrl: getSetting('logo_url', ''),
-      isDefaultPassword: getSetting('is_default_password', '0') === '1',
     });
   });
-
-  app.post('/api/auth/login', (req, res) => {
-    const ip = req.ip || 'unknown';
-    const now = Date.now();
-    const attempt = loginAttempts.get(ip);
-    if (attempt && attempt.lockedUntil > now) {
-      const waitSeconds = Math.ceil((attempt.lockedUntil - now) / 1000);
-      res.status(429).json({
-        error: `Demasiadas tentativas falhadas. Aguarde ${waitSeconds} segundos antes de tentar novamente.`,
-      });
-      return;
-    }
-
-    const { role, password } = req.body as { role?: string; password?: string };
-    if (role !== 'CEO' && role !== 'PCA') {
-      res.status(400).json({ error: 'Selecione um perfil autorizado (CEO ou PCA).' });
-      return;
-    }
-    if (typeof password !== 'string' || password.length === 0) {
-      res.status(400).json({ error: 'Introduza a palavra-passe administrativa.' });
-      return;
-    }
-
-    const storedHash = getSetting('admin_password_hash');
-    if (!verifyPassword(password, storedHash)) {
-      const current = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
-      const nextCount = current.count + 1;
-      loginAttempts.set(ip, {
-        count: nextCount,
-        lockedUntil: nextCount >= 5 ? now + 60_000 : 0,
-      });
-      res.status(401).json({ error: 'Palavra-passe incorreta.' });
-      return;
-    }
-
-    loginAttempts.delete(ip);
-
-    const token = signToken({
-      role,
-      exp: now + 1000 * 60 * 60 * 24 * 7, // 7 days
-      nonce: crypto.randomBytes(8).toString('hex'),
-    });
-
-    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
-    res.cookie(SESSION_COOKIE, token, {
-      httpOnly: true,
-      sameSite: isHttps ? 'none' : 'lax',
-      secure: isHttps,
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-      path: '/',
-    });
-
-    recordAudit({
-      actor: role,
-      action: 'LOGIN',
-      entityType: 'sessao',
-      summary: `Início de sessão autorizado (${role}).`,
-    });
-
-    res.json({
-      ok: true,
-      role,
-      token,
-      isDefaultPassword: getSetting('is_default_password', '0') === '1',
-    });
-  });
-
-  app.post('/api/auth/logout', (req: AuthenticatedRequest, res) => {
-    const payload = verifyToken(extractToken(req));
-    if (payload) {
-      recordAudit({
-        actor: payload.role,
-        action: 'LOGOUT',
-        entityType: 'sessao',
-        summary: `Sessão encerrada (${payload.role}).`,
-      });
-    }
-    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
-    res.clearCookie(SESSION_COOKIE, {
-      httpOnly: true,
-      sameSite: isHttps ? 'none' : 'lax',
-      secure: isHttps,
-      path: '/',
-    });
-    res.json({ ok: true });
-  });
-
-  // Protected API routes below
-  app.use('/api', requireAuth);
 
   app.post('/api/auth/change-password', (req: AuthenticatedRequest, res) => {
+    if (!process.env.ADMIN_API_KEY?.trim() || !hasValidAdminKey(req)) {
+      res.status(403).json({ error: 'Autorização administrativa independente necessária.' });
+      return;
+    }
     const { currentPassword, newPassword } = req.body as {
       currentPassword?: string;
       newPassword?: string;
@@ -247,7 +169,7 @@ async function startServer() {
       actor: req.adminRole!,
       action: 'ALTERAR_SENHA',
       entityType: 'seguranca',
-      summary: 'Palavra-passe administrativa partilhada (CEO/PCA) alterada.',
+      summary: 'Palavra-passe administrativa alterada.',
     });
 
     res.json({ ok: true });
@@ -259,7 +181,6 @@ async function startServer() {
       companyName: getSetting('company_name', 'NOVO PLANETA'),
       logoUrl: getSetting('logo_url', ''),
       commissionRate: Number(getSetting('commission_rate', '10')) || 10,
-      isDefaultPassword: getSetting('is_default_password', '0') === '1',
     });
   });
 

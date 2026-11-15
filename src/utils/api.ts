@@ -1,25 +1,3 @@
-const TOKEN_STORAGE_KEY = 'np_auth_token';
-
-export function getStoredToken(): string | null {
-  try {
-    return sessionStorage.getItem(TOKEN_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function setStoredToken(token: string | null): void {
-  try {
-    if (token) {
-      sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
-    } else {
-      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage restriction errors
-  }
-}
-
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -38,13 +16,9 @@ export function buildApiUrl(url: string): string {
 }
 
 export async function apiFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
-  const token = getStoredToken();
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type') && options.body && typeof options.body === 'string') {
     headers.set('Content-Type', 'application/json');
-  }
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
   }
 
   const targetUrl = buildApiUrl(url);

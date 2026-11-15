@@ -5,7 +5,6 @@ import {
   ClipboardCheck,
   Landmark,
   LayoutDashboard,
-  LogOut,
   Menu,
   PiggyBank,
   Receipt,
@@ -21,13 +20,12 @@ import { DailyClosingPage } from './pages/DailyClosingPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { DepositsPage } from './pages/DepositsPage';
 import { ExpensesPage } from './pages/ExpensesPage';
-import { LoginPage } from './pages/LoginPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { SalesPage } from './pages/SalesPage';
 import { SavedMoneyPage } from './pages/SavedMoneyPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { AdminRole, AppSettings } from './types/finance';
-import { apiFetch, setStoredToken } from './utils/api';
+import { AppSettings } from './types/finance';
+import { apiFetch } from './utils/api';
 import { formatDatePT, getTodayISO } from './utils/format';
 
 type NavId =
@@ -56,81 +54,26 @@ const NAV_ITEMS: { id: NavId; label: string; icon: typeof LayoutDashboard }[] = 
 ];
 
 export default function App() {
-  const [authChecked, setAuthChecked] = useState(false);
-  const [authenticated, setAuthenticated] = useState(false);
-  const [role, setRole] = useState<AdminRole | null>(null);
   const [companyName, setCompanyName] = useState('NOVO PLANETA');
   const [logoUrl, setLogoUrl] = useState('');
-  const [isDefaultPassword, setIsDefaultPassword] = useState(false);
 
   const [activeTab, setActiveTab] = useState<NavId>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  async function checkSession() {
-    try {
-      const status = await apiFetch<{
-        authenticated: boolean;
-        role: AdminRole | null;
-        companyName: string;
-        logoUrl: string;
-        isDefaultPassword: boolean;
-      }>('/api/auth/status');
-      setAuthenticated(status.authenticated);
-      setRole(status.role);
-      setCompanyName(status.companyName || 'NOVO PLANETA');
-      setLogoUrl(status.logoUrl || '');
-      setIsDefaultPassword(status.isDefaultPassword);
-    } catch {
-      setAuthenticated(false);
-      setRole(null);
-    } finally {
-      setAuthChecked(true);
-    }
-  }
-
   useEffect(() => {
-    checkSession();
+    apiFetch<AppSettings>('/api/settings')
+      .then((settings) => {
+        if (settings.companyName) setCompanyName(settings.companyName);
+        if (typeof settings.logoUrl === 'string') setLogoUrl(settings.logoUrl);
+      })
+      .catch(() => {
+        // Keep default branding if initial settings fetch fails
+      });
   }, []);
-
-  async function handleLogout() {
-    try {
-      await apiFetch('/api/auth/logout', { method: 'POST' });
-    } catch {
-      // Ignore network error on logout
-    }
-    setStoredToken(null);
-    setAuthenticated(false);
-    setRole(null);
-    setActiveTab('dashboard');
-  }
 
   function handleSettingsUpdated(next: AppSettings) {
     setCompanyName(next.companyName);
     setLogoUrl(next.logoUrl);
-    setIsDefaultPassword(next.isDefaultPassword);
-  }
-
-  if (!authChecked) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center text-sm text-slate-500">
-        A carregar sistema NOVO PLANETA...
-      </div>
-    );
-  }
-
-  if (!authenticated || !role) {
-    return (
-      <LoginPage
-        companyName={companyName}
-        logoUrl={logoUrl}
-        isDefaultPassword={isDefaultPassword}
-        onAuthenticated={(nextRole, defaultPwd) => {
-          setAuthenticated(true);
-          setRole(nextRole);
-          setIsDefaultPassword(defaultPwd);
-        }}
-      />
-    );
   }
 
   const currentNav = NAV_ITEMS.find((item) => item.id === activeTab);
@@ -168,19 +111,11 @@ export default function App() {
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-200 space-y-3">
+        <div className="p-4 border-t border-slate-200">
           <div className="text-xs text-slate-500">
-            Sessão ativa: <strong className="text-slate-900">{role}</strong> ·{' '}
+            <strong className="text-slate-900">Controlo Diário</strong> ·{' '}
             <span className="font-mono">{formatDatePT(getTodayISO())}</span>
           </div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="w-full min-h-[40px] inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors whitespace-nowrap"
-          >
-            <LogOut className="h-3.5 w-3.5" />
-            Encerrar Sessão
-          </button>
         </div>
       </aside>
 
@@ -233,14 +168,10 @@ export default function App() {
             </nav>
 
             <div className="p-4 border-t border-slate-200">
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700"
-              >
-                <LogOut className="h-4 w-4" />
-                Encerrar Sessão ({role})
-              </button>
+              <div className="text-xs text-slate-500">
+                <strong className="text-slate-900">Controlo Diário</strong> ·{' '}
+                <span className="font-mono">{formatDatePT(getTodayISO())}</span>
+              </div>
             </div>
           </div>
         </div>
