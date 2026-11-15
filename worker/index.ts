@@ -195,7 +195,11 @@ export async function handleApiRequest(request: Request, env: WorkerEnv): Promis
   const db = env.DB;
   const secret = env.SESSION_SECRET || (await getSettingD1(db, 'session_secret'));
   const isHttps = url.protocol === 'https:';
-  const sameSiteCookie = isHttps ? 'SameSite=None; Secure' : 'SameSite=Lax';
+  const requestOrigin = request.headers.get('Origin');
+  const isCrossOrigin = Boolean(requestOrigin && requestOrigin !== url.origin);
+  const sameSiteCookie = isHttps
+    ? `${isCrossOrigin ? 'SameSite=None' : 'SameSite=Lax'}; Secure`
+    : 'SameSite=Lax';
 
   if (path === '/api/health') {
     if (method !== 'GET') return json(request, env, { error: 'Método não permitido.' }, 405, { Allow: 'GET, OPTIONS' });

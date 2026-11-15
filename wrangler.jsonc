@@ -6,14 +6,17 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*"],
+    // Executar sempre o Worker primeiro para impedir que a camada estática devolva HTTP 405 em POST /api/*
+    "run_worker_first": true,
     "not_found_handling": "single-page-application"
   },
+  // IMPORTANTE: Substitua o "database_id" pelo UUID real de 36 caracteres da sua base de dados D1 na Cloudflare
+  // (obtido com `npx wrangler d1 create novo-planeta-db` ou no Painel Cloudflare -> Storage & Databases -> D1).
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "novo-planeta-db",
-      "database_id": "novo-planeta-db"
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_UUID"
     }
   ]
 }
