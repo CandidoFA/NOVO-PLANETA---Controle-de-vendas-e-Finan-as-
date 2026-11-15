@@ -1,6 +1,5 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "novo-planeta-financas",
+  "name": "novo-planeta---controle-de-vendas-e-finan-as",
   "main": "worker/index.ts",
   "compatibility_date": "2026-01-01",
   "assets": {
@@ -10,14 +9,13 @@
     "run_worker_first": true,
     "not_found_handling": "single-page-application"
   },
-  // IMPORTANTE: Substitua o "database_id" pelo UUID real de 36 caracteres da sua base de dados D1 na Cloudflare
-  // (obtido com `npx wrangler d1 create novo-planeta-db` ou no Painel Cloudflare -> Storage & Databases -> D1).
+  // Ligação à base de dados Cloudflare D1 (binding "DB").
+  // O Wrangler v4.45+ provisiona/associa automaticamente a D1 quando database_id é omitido;
+  // caso já tenha um UUID específico no painel Cloudflare (D1), pode adicioná-lo em "database_id".
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "novo-planeta-db",
-      "database_id": // "wrangler.jsonc",
-"nome": "novo-planeta---controle-de-vendas-e-finan-as"
+      "database_name": "novo-planeta-db"
     }
   ]
 }
