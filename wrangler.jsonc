@@ -16,7 +16,8 @@
     {
       "binding": "DB",
       "database_name": "novo-planeta-db",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_UUID"
+      "database_id": // wrangler.jsonc
+"name": "novo-planeta---controle-de-vendas-e-finan-as",
     }
   ]
 }
